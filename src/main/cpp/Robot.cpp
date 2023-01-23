@@ -1,6 +1,4 @@
 #include <cmath>
-#include <iostream>
-#include <stdlib.h>
 
 #include <frc/TimedRobot.h>
 #include <ctre/Phoenix.h>
@@ -9,165 +7,94 @@
 #include <ctre/phoenix/sensors/WPI_CANCoder.h>
 #include <frc/smartdashboard/SmartDashboard.h>
 #include <frc/controller/PIDController.h>
+
 #include "constants.h"
+#include "helper.h"
 
-// #include "Constants.h"
-using namespace std;
-
-const double rotationVectorMultiplier = 1.5; // controls how much of the vector addition is dedicated to rotation vs field movement  0 < x < double limit idk
-const double speedLimit = 0.1;             // limit motor speed output   0 < x <= 1
-const double baseWidth = 14.5;             // inches
-const double baseLength = 23.25;
-
-// For determining motor positions on an x,y grid
-const double relativeX = baseWidth / 2;
-const double relativeY = baseLength / 2;
-
-double relativeAFL;
-double relativeAFR;
-double relativeABL;
-double relativeABR;
-//pid difference var
+// Proportional value given to turn motors
+// Desired turn angles; it's multipurpose to remove clutter :p
 double desiredTurnFL;
-double distanceFL;
 double desiredTurnFR;
-double distanceFR;
 double desiredTurnBL;
-double distanceBL;
 double desiredTurnBR;
-double distanceBR;
-//desired angle
-double desiredAFL;
-double desiredAFR;
-double desiredABL;
-double desiredABR;
 
+// Processed drive motor speed
 double driveFL;
 double driveFR;
 double driveBL;
 double driveBR;
 
-double magnitude(double x, double y) // magnitude of vector
-{
-    return sqrt(x * x + y * y);
-}
-
-int magnitudeOptimization(double initialAngle, double finalAngle)
-{
-    double posDiff = fabs(fmod(finalAngle - initialAngle, 360.0));
-    if (posDiff > 90.0 && posDiff < 270.0)
-    {
-        return -1;
-    }
-    return 1;
-}
-double angleOptimisation(double initialAngle, double finalAngle)
-{
-    // return finalAngle;
-    double diff = fmod(finalAngle - initialAngle, 360.0);
-    double posDiff = fabs(diff);
-    if (posDiff > 90.0 && posDiff < 270.0)
-    {
-        diff = fmod(diff + 180.0, 360.0);
-    }
-    posDiff = fabs(diff);
-
-    if (posDiff <= 90.0)
-    {
-        return diff;
-    }
-    else if (diff >= 270.0)
-    {
-        return diff - 360.0;
-    }
-    return diff + 360.0;
-}
-
-double findMax(double arr[], int len) // finds max value in array
-{
-    double Max = arr[0];
-    for (int i = 1; i < len; i++)
-    {
-        Max = max(Max, arr[i]);
-    }
-    return Max;
-}
-
-double getDegree(double x)
-{
-    double a = x * 180.0 / M_PI;
-    return a;
-}
-
-double getRadian(double x)
-{
-    double a = x * M_PI / 180.0;
-    return a;
-}
-
-double deadband(double joystickInput)
-{
-    if (abs(joystickInput) <= 0.2)
-    {
-        return 0.0;
-    }
-    return joystickInput;
-}
-
-// .flm = Front left magnitude, .fla = Front left argument
+// all doubles
+// order: front left magnitude, front left angle, frm, fra, blm, bla, brm, bra
+// percentage magnitude
+// degree angle
 struct swerveModule
 {
     double flm, fla, frm, fra, blm, bla, brm, bra;
     swerveModule(double flm, double fla, double frm, double fra, double blm, double bla, double brm, double bra) : flm(flm), fla(fla), frm(frm), fra(fra), blm(blm), bla(bla), brm(brm), bra(bra) {}
 };
 
+// Stores a vector
 struct Point
 {
     double x, y;
     Point(double x, double y) : x(x), y(y) {}
 };
 
-/*  ali be like:
-Point(double x, double y)
-{
-    this->x = x;
-    this->y = y;
-}
-*/
-
-
-// this was written in radians but outputs degrees because of an oversight
+// Input degrees
+// Automatically applies deadbands
+// Outputs a swerveModule object 
+// (percentage speeds and angles in the order FL, FR, BL, BR)
 swerveModule swerveKinematics(double xLeft, double yLeft, double xRight, double gyro)
 {
+    // cmath reads radians; applies deadbands
+    gyro = getRadian(gyro);
+    xLeft = deadband(xLeft);
+    yLeft = deadband(yLeft);
+    xRight = deadband(xRight);
+
     Point posVector = Point(0.0, 0.0);
     double joystickMagnitude = magnitude(xLeft, yLeft);
-    if (joystickMagnitude)
+    if (joystickMagnitude)  // Check if left joystick has an input
     {
-        posVector.x = joystickMagnitude * sin(atan2(xLeft, yLeft) + gyro);
-        posVector.y = joystickMagnitude * cos(atan2(xLeft, yLeft) + gyro); // math notation of vector
+        // atan2 converts joystick input into angle
+        // + gyro makes desired angle calculation field relative 
+        // (was -gyro in math but +gyro works in practice?)
+        double fieldRelativePosAngle = atan2(xLeft, yLeft) + gyro;
+        
+        // convert angles back into Cartesian
+        posVector.x = joystickMagnitude * sin(fieldRelativePosAngle);
+        posVector.y = joystickMagnitude * cos(fieldRelativePosAngle);
     }
-    else if (abs(xRight) < 0.1)
+    else if (abs(xRight) < 0.1) // the < 0.1 is another reduncancy that is within the deadband
     {
+        // if no joystick input, return exit code
         return swerveModule(0.0, 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     }
 
-    double rotationScalar = rotationVectorMultiplier * xRight / magnitude(relativeX, relativeY);
+    // Creates a unit vector multiplied by right joystick input and proportionally scaled by "rotationVectorMultiplier"
+    double rotationScalar = mathConst::rotationVectorMultiplier * xRight / magnitude(mathConst::relativeX, mathConst::relativeY);
 
-    // declare rotation vector directions and add positional
-    Point rawFL = Point((rotationScalar * relativeY) + posVector.x, -(rotationScalar * relativeX) + posVector.y);
-    Point rawFR = Point((rotationScalar * relativeY) + posVector.x, (rotationScalar * relativeX) + posVector.y);
-    Point rawBL = Point(-(rotationScalar * relativeY) + posVector.x, -(rotationScalar * relativeX) + posVector.y);
-    Point rawBR = Point(-(rotationScalar * relativeY) + posVector.x, (rotationScalar * relativeX) + posVector.y);
+    // Apply rotation vectors to positional vectors to create the combined vector
+    // negatives and "y, x" are assigned (negative reciprocal = perpendicular line)
+    // actually the y values were negated again because it just worked. I don't know if I did math wrong, but it worked so there's another arbitrary negation
+    Point rawFL = Point((rotationScalar * mathConst::relativeY) + posVector.x, -(rotationScalar * mathConst::relativeX) + posVector.y);
+    Point rawFR = Point((rotationScalar * mathConst::relativeY) + posVector.x, (rotationScalar * mathConst::relativeX) + posVector.y);
+    Point rawBL = Point(-(rotationScalar * mathConst::relativeY) + posVector.x, -(rotationScalar * mathConst::relativeX) + posVector.y);
+    Point rawBR = Point(-(rotationScalar * mathConst::relativeY) + posVector.x, (rotationScalar * mathConst::relativeX) + posVector.y);
 
-    // the most sketchy thing ever.
+    // compares magnitudes of resulting vectors to see if any composite vector (rotation + position) exceeded "100%" output speed. 
+    // Divide by largest value greate than 100% to limit all magnitudes to 100% at max whilst maintaining relative rotational speeds
+    // Limiting Scalar also applies the motor speed limit cap
     double magnitudes[4] = {magnitude(rawFL.x, rawFL.y), magnitude(rawFR.x, rawFR.y), magnitude(rawBL.x, rawBL.y), magnitude(rawBR.x, rawBR.y)};
-    double limitingScalar = speedLimit / max(1.0, findMax(magnitudes, sizeof(magnitudes) / sizeof(magnitudes[0])));
-    Point physFL = Point(limitingScalar * magnitudes[0], atan2(rawFL.x, rawFL.y)); // converts to physics notation
+    double limitingScalar = mathConst::speedLimit / findMax(magnitudes, sizeof(magnitudes) / sizeof(magnitudes[0]));
+    
+    // Convert to Polar vectors for speed and direction for swerve modules
+    Point physFL = Point(limitingScalar * magnitudes[0], atan2(rawFL.x, rawFL.y));
     Point physFR = Point(limitingScalar * magnitudes[1], atan2(rawFR.x, rawFR.y));
     Point physBL = Point(limitingScalar * magnitudes[2], atan2(rawBL.x, rawBL.y));
     Point physBR = Point(limitingScalar * magnitudes[3], atan2(rawBR.x, rawBR.y));
-    //-----
-    
+
     return swerveModule(physFL.x, getDegree(physFL.y), physFR.x, getDegree(physFR.y), physBL.x, getDegree(physBL.y), physBR.x, getDegree(physBR.y));
 }
 
@@ -176,11 +103,6 @@ class Robot : public frc::TimedRobot
     public:
         void TeleopInit() override
         {
-            m_FLSwerveMotor.SetInverted(false);
-            m_FRSwerveMotor.SetInverted(false);
-            m_BLSwerveMotor.SetInverted(false);
-            m_BRDriveMotor.SetInverted(false);
-
             m_FLDriveMotor.SetNeutralMode(NeutralMode::Brake);
             m_FRDriveMotor.SetNeutralMode(NeutralMode::Brake);
             m_BLDriveMotor.SetNeutralMode(NeutralMode::Brake);
@@ -191,11 +113,10 @@ class Robot : public frc::TimedRobot
             m_BLSwerveMotor.SetNeutralMode(NeutralMode::Brake);
             m_BRSwerveMotor.SetNeutralMode(NeutralMode::Brake);
 
-            pid.EnableContinuousInput(-180, 180);
-            pid.SetTolerance(5, 10);
-
             m_navX.ZeroYaw();
 
+        // Uncomment this, run it, deploy with this commented out again, do not run, turn off robot, zero wheels manually, boot
+        // Zeros CANCoders (if someone finds a better way, PLEASE implement it ASAP)
             // FLCANCoder.ConfigSensorInitializationStrategy(BootToZero);
             // FRCANCoder.ConfigSensorInitializationStrategy(BootToZero);
             // BLCANCoder.ConfigSensorInitializationStrategy(BootToZero);
@@ -207,57 +128,39 @@ class Robot : public frc::TimedRobot
         }
         void TeleopPeriodic() override
         {
-            swerveModule moduleDesiredStates = swerveKinematics(deadband(m_Controller.GetLeftX()), deadband(m_Controller.GetLeftY()), deadband(m_Controller.GetRightX()), getRadian(m_navX.GetAngle()));
+            // moduleDesiredStates contains all calculated desired values.
+            // .flm is "Front left magnitude" (percentage)
+            // .fla is "Front left angle" (degrees)
+            // fl[], fr[], bl[], br[]
+            swerveModule moduleDesiredStates = swerveKinematics(m_Controller.GetLeftX(), m_Controller.GetLeftY(), m_Controller.GetRightX(), m_navX.GetAngle());
             
-            // only update wheel angles when input given
+            // when controller joysticks have no input, fla is 1000.0 (pseudo exit code)
+            // this only updates the "desired angle" read by the turn motors if the exit code is not detected
+            // 600 is an arbitrary value that is over a full rotation less than 1000 for reduncancy; anything 90<x<1000 works
             if (moduleDesiredStates.fla < 600.0)
             {
-                desiredAFL = moduleDesiredStates.fla;
-                desiredAFR = moduleDesiredStates.fra;
-                desiredABL = moduleDesiredStates.bla;
-                desiredABR = moduleDesiredStates.bra;
+                // Update wheel angles for the turn motors to read
+                desiredTurnFL = moduleDesiredStates.fla;
+                desiredTurnFR = moduleDesiredStates.fra;
+                desiredTurnBL = moduleDesiredStates.bla;
+                desiredTurnBR = moduleDesiredStates.bra;
             }
-            distanceFL = FLCANCoder.GetPosition()+desiredTurnFL - relativeAFL;
-            desiredTurnFL = angleOptimisation(FLCANCoder.GetPosition(), desiredAFL);
-            relativeAFL = FLCANCoder.GetPosition() + desiredTurnFL;
-            m_FLSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnFL*speedLimit/90.0);
 
-            distanceFR = desiredTurnFR + FRCANCoder.GetPosition() - relativeAFR;
-            desiredTurnFR = angleOptimisation(FRCANCoder.GetPosition(), desiredAFR);
-            relativeAFR = FRCANCoder.GetPosition() + desiredTurnFR;
-            m_FRSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnFR*speedLimit/90.0);
+            // convert desired angle to optimal turn angle and divide by 90 degrees to convert to percentage
+            // limit motor turn speed
+            desiredTurnFL = mathConst::speedLimit/90.0*angleOptimisation(FLCANCoder.GetPosition(), desiredTurnFL);
+            m_FLSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnFL);
 
-            distanceBL = desiredTurnBL + BLCANCoder.GetPosition() - relativeABL;
-            desiredTurnBL = angleOptimisation(BLCANCoder.GetPosition(), desiredABL);
-            relativeABL = BLCANCoder.GetPosition() + desiredTurnBL;
-            m_BLSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnBL*speedLimit/90.0);
+            desiredTurnFR = mathConst::speedLimit/90.0*angleOptimisation(FRCANCoder.GetPosition(), desiredTurnFR);
+            m_FRSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnFR);
 
-            distanceBR = desiredTurnBR + BRCANCoder.GetPosition() - relativeABR;
-            desiredTurnBR = angleOptimisation(BRCANCoder.GetPosition(), desiredABR);
-            relativeABR = BRCANCoder.GetPosition() + desiredTurnBR;
-            m_BRSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnBR*speedLimit/90.0);
-
-            frc::SmartDashboard::PutNumber("MFL", driveFL);
-            frc::SmartDashboard::PutNumber("MFR", driveFR);
-            frc::SmartDashboard::PutNumber("MBL", driveBL);
-            frc::SmartDashboard::PutNumber("MBR", driveBR);
+            desiredTurnBL = mathConst::speedLimit/90.0*angleOptimisation(BLCANCoder.GetPosition(), desiredTurnBL);
+            m_BLSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnBL);
+ 
+            desiredTurnBR = mathConst::speedLimit/90.0*angleOptimisation(BRCANCoder.GetPosition(), desiredTurnBR);
+            m_BRSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnBR);
             
-            frc::SmartDashboard::PutNumber("AFL", desiredTurnFL);
-            frc::SmartDashboard::PutNumber("AFR", desiredTurnFR);
-            frc::SmartDashboard::PutNumber("ABL", desiredTurnBL);
-            frc::SmartDashboard::PutNumber("ABR", desiredTurnBR);
-
-            frc::SmartDashboard::PutNumber("Distance", distanceFL);
-            frc::SmartDashboard::PutNumber("Current", FLCANCoder.GetPosition());
-            frc::SmartDashboard::PutNumber("Desired", relativeAFL);
-            frc::SmartDashboard::PutNumber("Yaw", m_navX.GetAngle());
-            frc::SmartDashboard::PutNumber("PID", pid.Calculate(distanceFL, relativeAFL)/*pid.Calculate(diffFL, relativeAFL)*/);
-            
-
-            if (m_Controller.GetAButtonPressed())
-            {
-                m_navX.ZeroYaw();
-            }
+            // Controls whether the wheels go forwards or backwards depending on the ideal turn angle
             driveFL = moduleDesiredStates.flm*magnitudeOptimization(FLCANCoder.GetPosition(), moduleDesiredStates.fla);
             driveFR = moduleDesiredStates.frm*magnitudeOptimization(FRCANCoder.GetPosition(), moduleDesiredStates.fra);
             driveBL = moduleDesiredStates.blm*magnitudeOptimization(BLCANCoder.GetPosition(), moduleDesiredStates.bla);
@@ -267,30 +170,53 @@ class Robot : public frc::TimedRobot
             m_FRDriveMotor.Set(ControlMode::PercentOutput, driveFR);
             m_BLDriveMotor.Set(ControlMode::PercentOutput, driveBL);
             m_BRDriveMotor.Set(ControlMode::PercentOutput, driveBR);
+
+        // Debug Math Outputs
+            // Drive motor speeds (percentage)
+            frc::SmartDashboard::PutNumber("MFL", driveFL);
+            frc::SmartDashboard::PutNumber("MFR", driveFR);
+            frc::SmartDashboard::PutNumber("MBL", driveBL);
+            frc::SmartDashboard::PutNumber("MBR", driveBR);
+            
+            // Desired turn angles (degrees)
+            frc::SmartDashboard::PutNumber("AFL", desiredTurnFL);
+            frc::SmartDashboard::PutNumber("AFR", desiredTurnFR);
+            frc::SmartDashboard::PutNumber("ABL", desiredTurnBL);
+            frc::SmartDashboard::PutNumber("ABR", desiredTurnBR);
+            
+            // Gyro angle (degrees)
+            frc::SmartDashboard::PutNumber("Yaw", m_navX.GetAngle());
+
+            // Zero gyro (sets PDP direction to North)
+            if (m_Controller.GetAButtonPressed())
+            {
+                m_navX.ZeroYaw();
+            }
         }
 
     private:
-        frc::XboxController m_Controller{0};
-        // ctre::phoenix::sensors::CANCoderConfiguration encoderturn;
-        frc2::PIDController pid{0.0009, 0, 0};
+        // Initialize all components
+        
+        // Main Controller
+        frc::XboxController m_Controller{ControllerIDs::kControllerMainID};
 
         // Drive Motors
-        TalonFX m_FLDriveMotor{3};
-        TalonFX m_FRDriveMotor{1};
-        TalonFX m_BLDriveMotor{2};
-        TalonFX m_BRDriveMotor{4};
+        TalonFX m_FLDriveMotor{CanIDs::kFLDriveMotor};
+        TalonFX m_FRDriveMotor{CanIDs::kFRDriveMotor};
+        TalonFX m_BLDriveMotor{CanIDs::kBLDriveMotor};
+        TalonFX m_BRDriveMotor{CanIDs::kBRDriveMotor};
 
         // Swerve Motors
-        TalonFX m_FLSwerveMotor{7};
-        TalonFX m_FRSwerveMotor{5};
-        TalonFX m_BLSwerveMotor{6};
-        TalonFX m_BRSwerveMotor{8};
+        TalonFX m_FLSwerveMotor{CanIDs::kFLSwerveMotor};
+        TalonFX m_FRSwerveMotor{CanIDs::kFRSwerveMotor};
+        TalonFX m_BLSwerveMotor{CanIDs::kBLSwerveMotor};
+        TalonFX m_BRSwerveMotor{CanIDs::kBRSwerveMotor};
 
         // Encoders
-        CANCoder FLCANCoder{11};
-        CANCoder FRCANCoder{9};
-        CANCoder BLCANCoder{10};
-        CANCoder BRCANCoder{12};
+        CANCoder FLCANCoder{CanIDs::kFLCANCoder};
+        CANCoder FRCANCoder{CanIDs::kFRCANCoder};
+        CANCoder BLCANCoder{CanIDs::kBLCANCoder};
+        CANCoder BRCANCoder{CanIDs::kBRCANCoder};
 
         // Gyro
         AHRS m_navX{frc::SPI::kMXP};
