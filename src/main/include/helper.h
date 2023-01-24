@@ -80,5 +80,15 @@ double deadband(double joystickInput)
     return joystickInput;
 }
 
+double slew(double currentPercentage, double desiredPercentage)
+{
+    double diff = desiredPercentage-currentPercentage;
+    double slewRate = 0.5;
+    if (abs(diff)>=slewRate)
+    {
+        desiredPercentage = currentPercentage - slewRate*2*(std::signbit(diff)-0.5);
+    }
+    return desiredPercentage;
+}
 
 #endif

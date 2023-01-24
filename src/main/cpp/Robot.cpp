@@ -24,6 +24,17 @@ double driveFR;
 double driveBL;
 double driveBR;
 
+// Intermediary Variable for implementing slew to swerve motors
+double slewAFL;
+double slewAFR;
+double slewABL;
+double slewABR;
+
+// Intermediary Variable for implementing slew to drive motors
+double slewDFL;
+double slewDFR;
+double slewDBL;
+double slewDBR;
 // all doubles
 // order: front left magnitude, front left angle, frm, fra, blm, bla, brm, bra
 // percentage magnitude
@@ -149,27 +160,36 @@ class Robot : public frc::TimedRobot
             // convert desired angle to optimal turn angle and divide by 90 degrees to convert to percentage
             // limit motor turn speed
             desiredTurnFL = mathConst::speedLimit/90.0*angleOptimisation(FLCANCoder.GetPosition(), desiredTurnFL);
-            m_FLSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnFL);
+            slewAFL = slew(slewAFL, desiredTurnFL);
+            m_FLSwerveMotor.Set(TalonFXControlMode::PercentOutput, slewAFL);
 
             desiredTurnFR = mathConst::speedLimit/90.0*angleOptimisation(FRCANCoder.GetPosition(), desiredTurnFR);
-            m_FRSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnFR);
+            slewAFR = slew(slewAFR, desiredTurnFR);
+            m_FRSwerveMotor.Set(TalonFXControlMode::PercentOutput, slewAFR);
 
             desiredTurnBL = mathConst::speedLimit/90.0*angleOptimisation(BLCANCoder.GetPosition(), desiredTurnBL);
-            m_BLSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnBL);
+            slewABL = slew(slewABL, desiredTurnBL);
+            m_BLSwerveMotor.Set(TalonFXControlMode::PercentOutput, slewABL);
  
             desiredTurnBR = mathConst::speedLimit/90.0*angleOptimisation(BRCANCoder.GetPosition(), desiredTurnBR);
-            m_BRSwerveMotor.Set(TalonFXControlMode::PercentOutput, desiredTurnBR);
+            slewABR = slew(slewABR, desiredTurnBR);
+            m_BRSwerveMotor.Set(TalonFXControlMode::PercentOutput, slewABR);
             
             // Controls whether the wheels go forwards or backwards depending on the ideal turn angle
             driveFL = moduleDesiredStates.flm*magnitudeOptimization(FLCANCoder.GetPosition(), moduleDesiredStates.fla);
             driveFR = moduleDesiredStates.frm*magnitudeOptimization(FRCANCoder.GetPosition(), moduleDesiredStates.fra);
             driveBL = moduleDesiredStates.blm*magnitudeOptimization(BLCANCoder.GetPosition(), moduleDesiredStates.bla);
             driveBR = moduleDesiredStates.brm*magnitudeOptimization(BRCANCoder.GetPosition(), moduleDesiredStates.bra);
-                
-            m_FLDriveMotor.Set(ControlMode::PercentOutput, driveFL);
-            m_FRDriveMotor.Set(ControlMode::PercentOutput, driveFR);
-            m_BLDriveMotor.Set(ControlMode::PercentOutput, driveBL);
-            m_BRDriveMotor.Set(ControlMode::PercentOutput, driveBR);
+            
+            slewDFL = slew(slewDFL, driveFL);
+            slewDFR = slew(slewDFR, driveFR);
+            slewDBL = slew(slewDBL, driveBL);
+            slewDBR = slew(slewDBR, driveBR);
+
+            m_FLDriveMotor.Set(ControlMode::PercentOutput, slewDFL);
+            m_FRDriveMotor.Set(ControlMode::PercentOutput, slewDFR);
+            m_BLDriveMotor.Set(ControlMode::PercentOutput, slewDBL);
+            m_BRDriveMotor.Set(ControlMode::PercentOutput, slewDBR);
 
         // Debug Math Outputs
             // Drive motor speeds (percentage)
@@ -187,10 +207,11 @@ class Robot : public frc::TimedRobot
             // Gyro angle (degrees)
             frc::SmartDashboard::PutNumber("Yaw", m_navX.GetAngle());
 
-            // Zero gyro (sets PDP direction to North)
-            if (m_Controller.GetAButtonPressed())
+            // Zero gyro (press d-pad in whatever direction the PDP is relative to the North you want)
+            if (m_Controller.GetPOV()!=-1)
             {
                 m_navX.ZeroYaw();
+                m_navX.SetAngleAdjustment(m_Controller.GetPOV());
             }
         }
 
